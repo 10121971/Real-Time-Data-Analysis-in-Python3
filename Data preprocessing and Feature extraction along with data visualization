@@ -1,0 +1,157 @@
+# importing necessary libraries and modules
+from pylsl import StreamInlet, resolve_stream
+import numpy as np
+import time
+from scipy import signal
+from sklearn.decomposition import FastICA
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
+from scipy import signal
+
+# First, resolve an EEG stream on the lab network
+print("Looking for an EEG stream...")
+streams = resolve_stream('name', 'openvibeSignal')
+
+inlet = StreamInlet(streams[0])
+info=inlet.info()
+#print(info.as_xml())
+num_channels = inlet.channel_count
+print(num_channels)
+#channel_names = [info.desc().child_value("channel" + str(i)).child_value("label").to_string()
+#                  for i in range(info.channel_count())]
+
+
+# creating empty arrays for pipelining
+start_time = time.time()
+duration = 10
+sample_data=[]
+downsample_data=[]
+filtered_data=[]
+arr=[[]]
+final_data1=[]
+
+# setting necessary parameters for data preprocessing
+sampling_frequency = inlet.info().nominal_srate()
+final_sampling_rate=256
+downsampling_factor = int(sampling_frequency / final_sampling_rate)
+
+lowcut = 0.5 # Lower cutoff frequency in Hz
+highcut = 45 # Upper cutoff frequency in Hz
+order = 4 # Filter order
+nyquist_freq = 0.25 * final_sampling_rate
+low = lowcut / nyquist_freq
+high = highcut / nyquist_freq
+b, a = signal.butter(order, [low, high], btype='band')
+
+count=0
+while True:
+    # get a new sample (you can also omit the timestamp part if you're not
+    # interested in it)
+    sample, timestamp = inlet.pull_sample()
+    #print(timestamp, sample)
+    sample_data.append(sample)
+    #print('sample data is :',sample_data)
+    print('timestamp',timestamp)
+    
+    if len(sample_data)==1:
+        downsample_data.append(sample_data[0])
+        sample_data.pop(0)
+        downsampled_data_1 = downsample_data[::downsampling_factor]
+        #print('downsampled_data_1 is :',downsampled_data_1)
+        count+=1
+        #downsample_data.pop(0)
+        #filtered_data_1=np.append(filtered_data_1,downsampled_data_1[(len(downsampled_data_1))-1][:])
+        filtered_data.append(downsampled_data_1)
+        #filtered_data_1 = signal.lfilter(b, a, downsampled_data_1, axis=0)
+        filtered_data_1 = signal.lfilter(b, a, downsampled_data_1, axis=0)
+        #print('filtered_data_1 is :',filtered_data_1)
+        downsample_data.pop(0)
+#        downsample_data.pop(0)
+#         ica = FastICA(n_components=num_channels, max_iter=1000, random_state=0)
+        ica = FastICA(n_components=10, max_iter=1000, random_state=0)
+        ica_data = ica.fit_transform(filtered_data_1.T).T
+        #print('ica_data is :',ica_data)
+        final_data1.append(ica_data[0])
+
+    elapsed_time = time.time() - start_time
+    # cinditional statement for breaking of loop
+    if elapsed_time >= duration:
+        break
+
+        
+df=pd.DataFrame(final_data1)
+# saving of data in a CSV file  
+df.to_csv(r"C:\Users\INMAS\Downloads\Untitled spreadsheet - Sheet1 (1).csv",index=False) 
+# reading of that data
+df1=pd.read_csv(r"C:\Users\INMAS\Downloads\Untitled spreadsheet - Sheet1 (1).csv")
+
+
+# plotting of final data of each channel
+sns.set(font_scale=1.2)
+sf=256
+
+for j in range(8):
+    time = np.linspace(0,1,len(df[j]))
+    fig,ax=plt.subplots(1,1,figsize=(12,4))
+    plt.plot(time,df[j],lw=1.5,color='k')
+    plt.xlabel("time")
+    plt.ylabel("voltage")
+    plt.xlim([time.min(), time.max()])
+    plt.title("channel_")
+    sns.despine()
+
+# dtermine window length by the formula :-
+#     2/low_frequency of the required wave
+
+
+# plotting of PSD of first 8 channels that are frontal and prefrontal cahnnels
+win=4*sf
+for k in range(8):
+    freqs,psd=signal.welch(df[k],sf,nperseg=win)
+    sns.set(font_scale=1.2, style='white')
+    plt.figure(figsize=(15,6))
+    plt.plot(freqs,psd,color='k',lw=2)
+    plt.xlabel("frequency")
+    plt.ylabel("PSD (V^2 / Hz)")
+    plt.ylim([0,psd.max()*1.1])
+    plt.title("Welch's periodogram")
+    plt.xlim([0,freqs.max()])
+    sns.despine()
+    
+
+# function for calculating bandpowers of different waves
+def bandpower(data,sf,band,window_sec=None,relative=False):
+    from scipy.signal import welch
+    from scipy.integrate import simps
+    band=np.asarray(band)
+    low,high=band
+    if window_sec is not None:
+        nperseg=window_sec*sf
+    else:
+        nperseg=(2/low)*sf
+        
+    freqs,psd=welch(data,sf,nperseg=nperseg)
+    freq_res=freqs[1]-freqs[0]
+    
+    idx_band=np.logical_and(freqs>=low, freqs<=high)
+    
+    bp=simps(psd[idx_band],dx=freq_res)
+    
+    if relative:
+        bp/=simps(psd,dx=freq_res)
+    return bp
+
+
+# implementation of function to calculate relative bandpower.
+# In this case Bandpower ratio of Theta and Alpha waves is calculated
+win_sec=4
+db=bandpower(df1["0"],sf,[4,8],win_sec) / bandpower(df1["0"],sf,[8,12],win_sec)
+db_rel=bandpower(df1["0"],sf,[4,8],win_sec,True) / bandpower(df1["0"],sf,[8,12],win_sec,True)
+print("theta/alpha ratio (absolute) : %.12f"%db)
+print("theta/alpha ratio (relative) : %.12f"%db_rel)
+
+
+
+
+
